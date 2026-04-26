@@ -37,7 +37,11 @@ impl Default for GroundGrid {
     fn default() -> Self {
         Self {
             visible: true,
-            color: Color::srgba(80.0 / 255.0, 70.0 / 255.0, 70.0 / 255.0, 0.35),
+            // Cool blue-tinted off-white at ~60 % alpha. Reads
+            // against both dark grounds and bright sky clear
+            // colours; the major-line × 3.5 boost still fits
+            // inside the alpha cap.
+            color: Color::srgba(0.62, 0.76, 0.95, 0.6),
         }
     }
 }
@@ -60,15 +64,17 @@ pub const LEVEL_STEPS: [f32; 4] = [
     BASE_STEP * LEVEL_SCALE * LEVEL_SCALE,
     BASE_STEP * LEVEL_SCALE * LEVEL_SCALE * LEVEL_SCALE,
 ];
-/// Lines per side for each level — kept constant so the per-level
-/// mesh cost stays flat. `LEVEL_HALF[i] = LINES_PER_SIDE * LEVEL_STEPS[i]`.
-const LINES_PER_SIDE: f32 = 50.0;
+/// Lines per side for each level. Coarser levels shrink so the
+/// "very-far" horizon doesn't extend kilometres past the camera —
+/// at the coarsest level we'd otherwise draw a 6 km square. Finer
+/// levels keep their full count for close-up detail.
+const LINES_PER_SIDE: [f32; 4] = [100.0, 60.0, 35.0, 20.0];
 /// Half-extent of each level's square (metres).
 pub const LEVEL_HALF: [f32; 4] = [
-    LINES_PER_SIDE * LEVEL_STEPS[0],
-    LINES_PER_SIDE * LEVEL_STEPS[1],
-    LINES_PER_SIDE * LEVEL_STEPS[2],
-    LINES_PER_SIDE * LEVEL_STEPS[3],
+    LINES_PER_SIDE[0] * LEVEL_STEPS[0],
+    LINES_PER_SIDE[1] * LEVEL_STEPS[1],
+    LINES_PER_SIDE[2] * LEVEL_STEPS[2],
+    LINES_PER_SIDE[3] * LEVEL_STEPS[3],
 ];
 /// Every Nth line is a major line (brighter alpha). Equal to
 /// [`LEVEL_SCALE`] so a level's major lines coincide with the next
@@ -78,11 +84,12 @@ const MAJOR_EVERY: i32 = LEVEL_SCALE as i32;
 /// so every `MAJOR_EVERY`-th line reads as a heavier "chapter" tick.
 const MAJOR_BOOST: f32 = 3.5;
 /// Fraction of the level's half-extent over which the radial fade
-/// kicks in. `1.0` = fade smoothly from centre to edge (old
-/// behaviour); `0.4` = lines stay full strength until the outer 40 %
-/// of the radius and then drop off — outer lines stay readable for
-/// longer.
-const EDGE_FADE_FRAC: f32 = 0.4;
+/// kicks in. `1.0` = fade smoothly from centre to edge; `0.92` =
+/// full strength only in the inner 8 % of the radius, then a long
+/// smoothstep down to 0 over the outer 92 %. High values keep the
+/// far horizon transparent so grid lines don't pile up at the
+/// vanishing point.
+const EDGE_FADE_FRAC: f32 = 0.92;
 /// Grid rides this height above the tangent plane.
 const GRID_Y: f32 = 0.05;
 
@@ -94,6 +101,14 @@ const GAUSS_PEAK: f32 = 0.602_06; // log10(4)
 /// Bell width. Wider = adjacent levels linger longer before fading
 /// out as the camera moves between their natural distances.
 const GAUSS_WIDTH: f32 = 0.55;
+/// How much sharper the per-kind fade is on the "camera too close"
+/// side of the Gaussian peak. `1.0` = symmetric (default);
+/// `> 1.0` = coarser-than-current levels vanish faster as you zoom
+/// in. Dots get the more aggressive value because their absolute
+/// size scales with the level's step (a level-N+1 dot is 4 × the
+/// area of a level-N dot, so even faint bleed-through reads).
+const LINE_CLOSE_FALLOFF: f32 = 2.5;
+const DOT_CLOSE_FALLOFF: f32 = 6.0;
 
 // ── Components ──────────────────────────────────────────────────────
 
@@ -124,6 +139,33 @@ const DOT_SEGMENTS: u32 = 8;
 const LINES_Y: f32 = GRID_Y;
 const DOTS_Y: f32 = GRID_Y + 0.002;
 
+
+// ── Plugin ──────────────────────────────────────────────────────────
+
+/// Plugin: registers the [`GroundGrid`] resource, spawns the LOD grid
+/// meshes at Startup, and runs the per-frame follow / fade systems.
+///
+/// The grid does not need a ground plane to render against — it sits
+/// on the y = 0 plane and is fully self-contained. If the host app
+/// doesn't want a ground at all, just don't spawn one.
+pub struct GroundGridPlugin;
+
+impl Plugin for GroundGridPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<GroundGrid>()
+            .add_systems(Startup, setup_ground_grid)
+            .add_systems(Update, (build_grid_meshes, update_grid_alpha));
+    }
+}
+
+fn setup_ground_grid(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    cfg: Res<GroundGrid>,
+) {
+    spawn_circle_meshes(&mut commands, &mut meshes, &mut materials, &cfg);
+}
 
 // ── Spawn ───────────────────────────────────────────────────────────
 
@@ -217,7 +259,10 @@ pub fn build_grid_meshes(
         };
         tr.translation.z = (cam.focus.z / snap_step).round() * snap_step;
 
-        let fade = level_fade(cam_dist, step);
+        let fade = match grid.kind {
+            GridKind::Lines => level_fade(cam_dist, step, LINE_CLOSE_FALLOFF),
+            GridKind::Dots => level_fade(cam_dist, step, DOT_CLOSE_FALLOFF),
+        };
         let a = cfg.color.alpha() * fade;
         *vis = if cfg.visible && a > 0.005 {
             Visibility::Visible
@@ -256,13 +301,18 @@ pub fn update_grid_alpha(
 
 // ── LOD fade ───────────────────────────────────────────────────────
 
-fn level_fade(cam_dist: f32, step: f32) -> f32 {
-    // Gaussian bell in log-space over the ratio `cam_dist / step`.
-    // Peak at GAUSS_PEAK, width GAUSS_WIDTH. Near zero outside
-    // ~2 × width from the peak.
+/// Asymmetric Gaussian bell over `log10(cam_dist / step)`. Peak at
+/// `GAUSS_PEAK`, width `GAUSS_WIDTH`. The "camera too close" side
+/// of the bell (z < 0, this level coarser than the camera needs)
+/// is sharpened by `close_falloff` so coarser-level grid doesn't
+/// bleed through the finer level the user is on. The "camera too
+/// far" side (z > 0) keeps the standard width so adjacent levels
+/// hand off smoothly as the user zooms out.
+fn level_fade(cam_dist: f32, step: f32, close_falloff: f32) -> f32 {
     let log_r = (cam_dist / step).max(1e-3).log10();
     let z = (log_r - GAUSS_PEAK) / GAUSS_WIDTH;
-    (-0.5 * z * z).exp()
+    let z_eff = if z < 0.0 { z * close_falloff } else { z };
+    (-0.5 * z_eff * z_eff).exp()
 }
 
 // ── Mesh generation ────────────────────────────────────────────────
@@ -272,53 +322,66 @@ fn build_level_mesh(cfg: &GroundGrid, step: f32, half: f32, _is_top: bool) -> Me
     let base_rgba = [s.red, s.green, s.blue, s.alpha];
 
     let n = (half / step) as i32;
-    let total_lines = (2 * n + 1) * 2;
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity((total_lines * 2) as usize);
-    let mut colors: Vec<[f32; 4]> = Vec::with_capacity((total_lines * 2) as usize);
+    // Each line is subdivided into one segment per cell so the per-
+    // vertex alpha can vary along its length. That's what gives the
+    // grid a soft *disc* falloff instead of a hard square edge —
+    // points along a single line at different radii get different
+    // alpha. We deliberately do NOT skip lines that the next-coarser
+    // LOD also draws: the `LineList` primitive is 1 pixel wide, so
+    // two levels stamping the same line just composite into a
+    // slightly brighter pixel (invisible). Skipping introduces gaps
+    // as soon as the parent level fades out.
+    let segments = 2 * n;
+    let total_segments = (2 * n + 1) * 2 * segments;
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity((total_segments * 2) as usize);
+    let mut colors: Vec<[f32; 4]> = Vec::with_capacity((total_segments * 2) as usize);
 
-    // Radial alpha + major-line boost. We deliberately do NOT skip
-    // lines that the next-coarser LOD also draws — the GPU's
-    // `LineList` primitive is 1 pixel wide, so two levels stamping
-    // the same line just composite into a slightly brighter pixel
-    // (invisible). Skipping introduces gaps as soon as the parent
-    // level fades out.
-    let line_color = |i: i32| -> [f32; 4] {
-        let t = (i.abs() as f32) / (n as f32);
-        let edge_fade = {
-            // Stay at full strength until `1 - EDGE_FADE_FRAC` of the
-            // radius, then smoothstep to 0 over the remaining outer
-            // band. Outer lines persist much longer than the old
-            // centre-to-edge smoothstep.
-            let u = ((1.0 - t) / EDGE_FADE_FRAC).clamp(0.0, 1.0);
-            u * u * (3.0 - 2.0 * u)
-        };
-        let major = i.rem_euclid(MAJOR_EVERY) == 0;
+    // Smoothstep on Euclidean radius — full strength inside the
+    // inner `1 - EDGE_FADE_FRAC` of the radius, then a smooth roll-
+    // off to 0 at `r = half`. Beyond `half` (e.g. at the square's
+    // diagonal corners) the fade naturally clamps to 0, which is
+    // why corners disappear cleanly.
+    let radial_fade = |x: f32, z: f32| -> f32 {
+        let r = (x * x + z * z).sqrt();
+        let t = (r / half).clamp(0.0, 1.0);
+        let u = ((1.0 - t) / EDGE_FADE_FRAC).clamp(0.0, 1.0);
+        u * u * (3.0 - 2.0 * u)
+    };
+
+    let vertex_color = |x: f32, z: f32, axis_idx: i32| -> [f32; 4] {
+        let major = axis_idx.rem_euclid(MAJOR_EVERY) == 0;
         let boost = if major { MAJOR_BOOST } else { 1.0 };
         [
             base_rgba[0],
             base_rgba[1],
             base_rgba[2],
-            (base_rgba[3] * edge_fade * boost).clamp(0.0, 1.0),
+            (base_rgba[3] * radial_fade(x, z) * boost).clamp(0.0, 1.0),
         ]
     };
 
-    // Lines running along +X (constant Z).
+    // Lines running along +X (constant Z), subdivided cell by cell.
     for i in -n..=n {
         let z = i as f32 * step;
-        let c = line_color(i);
-        positions.push([-half, 0.0, z]);
-        positions.push([half, 0.0, z]);
-        colors.push(c);
-        colors.push(c);
+        for s in 0..segments {
+            let x0 = -half + s as f32 * step;
+            let x1 = -half + (s + 1) as f32 * step;
+            positions.push([x0, 0.0, z]);
+            positions.push([x1, 0.0, z]);
+            colors.push(vertex_color(x0, z, i));
+            colors.push(vertex_color(x1, z, i));
+        }
     }
-    // Lines running along +Z (constant X).
+    // Lines running along +Z (constant X), subdivided cell by cell.
     for i in -n..=n {
         let x = i as f32 * step;
-        let c = line_color(i);
-        positions.push([x, 0.0, -half]);
-        positions.push([x, 0.0, half]);
-        colors.push(c);
-        colors.push(c);
+        for s in 0..segments {
+            let z0 = -half + s as f32 * step;
+            let z1 = -half + (s + 1) as f32 * step;
+            positions.push([x, 0.0, z0]);
+            positions.push([x, 0.0, z1]);
+            colors.push(vertex_color(x, z0, i));
+            colors.push(vertex_color(x, z1, i));
+        }
     }
 
     let mut mesh = Mesh::new(
@@ -352,16 +415,19 @@ fn build_dots_mesh(cfg: &GroundGrid, step: f32, half: f32, _is_top: bool) -> Mes
             // the world origin, and a 3.5× boost on each turns them
             // into a single bright disc. Major hierarchy lives on
             // the line layer.
-            let t_axis = (i.abs().max(j.abs()) as f32) / (n as f32);
+            let cx = i as f32 * step;
+            let cz = j as f32 * step;
+            // Euclidean radial fade: dots outside the inscribed disc
+            // (corners of the square) clamp to zero, so the grid
+            // disappears as a soft circle rather than a hard square.
+            let r = (cx * cx + cz * cz).sqrt();
+            let t = (r / half).clamp(0.0, 1.0);
             let edge_fade = {
-                let u = ((1.0 - t_axis) / EDGE_FADE_FRAC).clamp(0.0, 1.0);
+                let u = ((1.0 - t) / EDGE_FADE_FRAC).clamp(0.0, 1.0);
                 u * u * (3.0 - 2.0 * u)
             };
             let alpha = (base_rgba[3] * edge_fade).clamp(0.0, 1.0);
             let color = [base_rgba[0], base_rgba[1], base_rgba[2], alpha];
-
-            let cx = i as f32 * step;
-            let cz = j as f32 * step;
 
             // Shrink in world-space the further the dot sits from
             // the panel centre. Square the fade so the size drops

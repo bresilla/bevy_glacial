@@ -28,6 +28,13 @@ pub struct ChaseCamera {
     pub distance: f32,
     pub min_distance: f32,
     pub max_distance: f32,
+    /// Lower elevation clamp (radians). Default `5°` keeps the
+    /// camera above the implicit ground; set to e.g. `-89°` if you
+    /// want to orbit under the horizon (no ground plane).
+    pub min_elevation: f32,
+    /// Upper elevation clamp (radians). Default `89°` — capped
+    /// short of `90°` to dodge gimbal lock at the pole.
+    pub max_elevation: f32,
     pub pan_sensitivity: f32,
     pub orbit_speed: f32,
     /// Exponential zoom coefficient — 0.05 = 5 % per scroll line.
@@ -48,6 +55,8 @@ impl Default for ChaseCamera {
             distance: 14.0,
             min_distance: 3.0,
             max_distance: 120.0,
+            min_elevation: 5f32.to_radians(),
+            max_elevation: 89f32.to_radians(),
             pan_sensitivity: 0.0012,
             orbit_speed: 0.005,
             zoom_step: 0.05,
@@ -137,10 +146,7 @@ pub fn chase_camera_control(
         if orbit_delta != Vec2::ZERO {
             cam.yaw -= orbit_delta.x * cam.orbit_speed;
             cam.elevation += orbit_delta.y * cam.orbit_speed;
-            cam.elevation = cam.elevation.clamp(
-                5f32.to_radians(),
-                89f32.to_radians(),
-            );
+            cam.elevation = cam.elevation.clamp(cam.min_elevation, cam.max_elevation);
         }
 
         apply_rig(&cam, &mut tr);
@@ -210,6 +216,19 @@ pub fn apply_rig(cam: &ChaseCamera, tr: &mut Transform) {
     );
     let cam_world = cam.focus + offset;
     *tr = Transform::from_translation(cam_world).looking_at(cam.focus, Vec3::Y);
+}
+
+/// Plugin: registers the orbit-camera control + zoom systems.
+///
+/// Spawning the camera entity (with [`ChaseCamera`]) is the host
+/// app's job — this plugin only wires the per-frame mouse-binding
+/// systems.
+pub struct ChaseCameraPlugin;
+
+impl Plugin for ChaseCameraPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, (chase_camera_control, chase_camera_zoom));
+    }
 }
 
 /// Cast a ray from the camera through `cursor` and intersect it

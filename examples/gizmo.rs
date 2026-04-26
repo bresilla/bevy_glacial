@@ -16,6 +16,11 @@
 //!   * S                scale-only
 //!   * X / Y / Z        constrain to that axis
 //!   * Esc              clear mode override
+//!
+//! This example uses the `GlacialPlugins` bundle for brevity. To pick
+//! individual pieces, add them directly — e.g. `.add_plugins(
+//! TransformGizmoPlugin)` for gizmo-only, or `GlacialPlugins.build()
+//! .disable::<GroundGridPlugin>()` to drop the grid.
 
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
@@ -31,8 +36,11 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins(GlacialPlugin)
-        .add_plugins(TransformGizmoPlugin)
+        .add_plugins(GlacialPlugins)
+        // Dark navy clear colour — keeps the scene contrasty for
+        // the cube + grid while leaning slightly blue so the grid's
+        // cool-white lines feel cohesive against the sky.
+        .insert_resource(ClearColor(Color::srgb(0.05, 0.08, 0.14)))
         .insert_resource(GizmoOptions {
             hotkeys: Some(GizmoHotkeys::default()),
             ..default()
@@ -47,23 +55,10 @@ fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    grid_cfg: Res<GroundGrid>,
 ) {
-    // Plain ground plane — a big flat cuboid, dark slate so the cube
-    // and gizmo handles read against it without competing colour.
-    commands.spawn((
-        Name::new("Ground"),
-        Mesh3d(meshes.add(Cuboid::new(200.0, 0.1, 200.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.18, 0.20, 0.22),
-            perceptual_roughness: 0.95,
-            ..default()
-        })),
-        Transform::from_xyz(0.0, -0.05, 0.0),
-    ));
-
-    // LOD ground grid.
-    spawn_circle_meshes(&mut commands, &mut meshes, &mut materials, &grid_cfg);
+    // No ground plane — the LOD grid is fully self-contained and
+    // sits on the y = 0 plane on its own. This example demonstrates
+    // that `bevy_glacial` does not force a world on the host app.
 
     // The subject of the gizmo: an accent-tinted 2 m cube.
     commands.spawn((
@@ -100,7 +95,15 @@ fn setup_scene(
 
     // Camera with the chase rig + the GizmoCamera marker so the
     // transform-gizmo plugin knows which view to draw against.
-    let chase = ChaseCamera::default();
+    //
+    // To make the camera follow another entity, attach a
+    // `FollowTarget { target, offset, lerp_speed }` on this entity.
+    let chase = ChaseCamera {
+        // No ground in this demo — let the camera orbit below the
+        // horizon to look at the cube from underneath.
+        min_elevation: -89f32.to_radians(),
+        ..Default::default()
+    };
     let mut tr = Transform::default();
     apply_rig(&chase, &mut tr);
     commands.spawn((

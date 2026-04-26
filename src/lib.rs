@@ -2,23 +2,30 @@
 //!
 //! Project-agnostic Bevy primitives that pair well with
 //! [`bevy_frost`](https://github.com/bresilla/bevy_frost): a
-//! mouse-driven orbit camera, a self-fading LOD ground grid, a
-//! selection-ring shader, and a transform-gizmo (translate / rotate /
-//! scale handles) inlined from the upstream
+//! mouse-driven orbit camera, an optional follow rig, a self-fading
+//! LOD ground grid, a selection-ring shader, and a transform-gizmo
+//! (translate / rotate / scale handles) inlined from the upstream
 //! [`transform-gizmo`](https://github.com/urholaukkarinen/transform-gizmo)
 //! project by **Urho Laukkarinen** (MIT or Apache-2.0; full text at
 //! `LICENSE-MIT.transform-gizmo` / `LICENSE-APACHE.transform-gizmo`).
 //!
 //! ## Shape
 //!
-//! * [`camera`] — [`ChaseCamera`] component + control / zoom systems.
-//! * [`grid`] — [`GroundGrid`] resource + LOD line / dot meshes that
-//!   follow the camera's focus.
-//! * [`selection_ring`] — extended-material flat ring that attaches to
-//!   a target entity.
-//! * [`gizmo`] — vendored transform-gizmo: add [`TransformGizmoPlugin`]
-//!   and tag your camera with [`GizmoCamera`]; attach [`GizmoTarget`]
-//!   to whichever entity you want manipulable.
+//! Each feature is its own `Plugin` so apps can opt in to just what
+//! they need:
+//!
+//! * [`ChaseCameraPlugin`](camera::ChaseCameraPlugin) — mouse pan /
+//!   orbit / zoom for an entity tagged with [`ChaseCamera`].
+//! * [`FollowCameraPlugin`](follow::FollowCameraPlugin) — optional
+//!   [`FollowTarget`] component that steers a [`ChaseCamera`] at
+//!   another entity with offset + smoothing.
+//! * [`GroundGridPlugin`](grid::GroundGridPlugin) — auto-spawns the
+//!   LOD ground grid and runs its follow / fade systems.
+//! * [`SelectionRingPlugin`] — animated ring marker.
+//! * [`AxisGizmoPlugin`](axis_gizmo::AxisGizmoPlugin) — visualization
+//!   only: draws an R/G/B arrow triad at each entity tagged with
+//!   [`AxisGizmo`]. No interaction.
+//! * [`TransformGizmoPlugin`] — translate / rotate / scale handles.
 //!
 //! ## Getting started
 //!
@@ -29,24 +36,52 @@
 //! fn main() {
 //!     App::new()
 //!         .add_plugins(DefaultPlugins)
-//!         .add_plugins(GlacialPlugin)
-//!         .add_plugins(TransformGizmoPlugin)
+//!         // Everything in one go:
+//!         .add_plugins(GlacialPlugins)
 //!         .run();
 //! }
 //! ```
+//!
+//! Or pick individual pieces — for example, gizmo only:
+//!
+//! ```ignore
+//! App::new()
+//!     .add_plugins(DefaultPlugins)
+//!     .add_plugins(TransformGizmoPlugin)
+//!     .run();
+//! ```
+//!
+//! Or everything except the grid:
+//!
+//! ```ignore
+//! use bevy::app::PluginGroup;
+//!
+//! App::new()
+//!     .add_plugins(DefaultPlugins)
+//!     .add_plugins(GlacialPlugins.build().disable::<GroundGridPlugin>())
+//!     .run();
+//! ```
 
+pub mod axis_gizmo;
 pub mod camera;
+pub mod follow;
 pub mod gizmo;
 pub mod grid;
 pub mod prelude;
 pub mod selection_ring;
 
+pub use axis_gizmo::{
+    draw_axis_gizmos, draw_axis_triad, draw_axis_triad_with_colors, AxisGizmo, AxisGizmoPlugin,
+    DEFAULT_AXIS_COLORS,
+};
 pub use camera::{
     apply_rig, chase_camera_control, chase_camera_zoom, cursor_ray_to_ground, ChaseCamera,
+    ChaseCameraPlugin,
 };
+pub use follow::{follow_camera_target, FollowCameraPlugin, FollowTarget};
 pub use grid::{
-    build_grid_meshes, spawn_circle_meshes, update_grid_alpha, GridKind, GroundGrid, LocalGrid,
-    LEVEL_HALF, LEVEL_STEPS,
+    build_grid_meshes, spawn_circle_meshes, update_grid_alpha, GridKind, GroundGrid,
+    GroundGridPlugin, LocalGrid, LEVEL_HALF, LEVEL_STEPS,
 };
 pub use selection_ring::{
     SelectionRing, SelectionRingEntity, SelectionRingExtension, SelectionRingMaterial,
@@ -58,22 +93,21 @@ pub use gizmo::{
     GizmoOptions, GizmoOrientation, GizmoTarget, GizmoVisuals, TransformGizmoPlugin,
 };
 
-use bevy::prelude::*;
+use bevy::app::{PluginGroup, PluginGroupBuilder};
 
-/// Camera + grid bundle. Does **not** include the transform-gizmo
-/// plugin — add [`TransformGizmoPlugin`] separately if you want handles.
-pub struct GlacialPlugin;
+/// `PluginGroup` bundling every `bevy_glacial` plugin: camera, follow,
+/// grid, selection-ring, transform-gizmo. Use `.disable::<T>()` on the
+/// builder to drop any sub-plugin you don't want.
+pub struct GlacialPlugins;
 
-impl Plugin for GlacialPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<grid::GroundGrid>().add_systems(
-            Update,
-            (
-                camera::chase_camera_control,
-                camera::chase_camera_zoom,
-                grid::build_grid_meshes,
-                grid::update_grid_alpha,
-            ),
-        );
+impl PluginGroup for GlacialPlugins {
+    fn build(self) -> PluginGroupBuilder {
+        PluginGroupBuilder::start::<Self>()
+            .add(ChaseCameraPlugin)
+            .add(FollowCameraPlugin)
+            .add(GroundGridPlugin)
+            .add(SelectionRingPlugin)
+            .add(AxisGizmoPlugin)
+            .add(TransformGizmoPlugin)
     }
 }
