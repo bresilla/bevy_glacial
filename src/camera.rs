@@ -3,6 +3,7 @@
 //! Bindings:
 //!   Scroll wheel                — zoom (logarithmic, smoothed)
 //!   Middle-click + drag         — pan (translate focus in world XZ plane)
+//!   Middle + Left/Right + drag  — lift (translate focus in world Y, vertical drag only)
 //!   Left + Right pressed + drag — orbit (yaw + pitch)
 //!   Double middle-click         — snap focus to cursor's world-point
 //!
@@ -74,26 +75,37 @@ pub fn chase_camera_control(
     primary_window: Query<&Window, With<PrimaryWindow>>,
     bevy_cameras: Query<(&Camera, &GlobalTransform)>,
     mut pan_anchor: Local<Option<Vec2>>,
+    mut lift_anchor: Local<Option<Vec2>>,
     mut orbit_anchor: Local<Option<Vec2>>,
     mut cameras: Query<(&mut ChaseCamera, &mut Transform)>,
 ) {
     let middle_pressed = mouse_buttons.pressed(MouseButton::Middle);
     let left_pressed = mouse_buttons.pressed(MouseButton::Left);
     let right_pressed = mouse_buttons.pressed(MouseButton::Right);
-    let both_lr = left_pressed && right_pressed;
 
-    if !middle_pressed {
+    // Pressing a side button while middle is held promotes the
+    // gesture from XZ pan → vertical lift. Plain L+R (no middle)
+    // stays the orbit gesture. The three modes are mutually
+    // exclusive — `lift_active` shadows pan.
+    let lift_active = middle_pressed && (left_pressed || right_pressed);
+    let pan_active = middle_pressed && !lift_active;
+    let orbit_active = left_pressed && right_pressed && !middle_pressed;
+
+    if !pan_active {
         *pan_anchor = None;
     }
-    if !both_lr {
+    if !lift_active {
+        *lift_anchor = None;
+    }
+    if !orbit_active {
         *orbit_anchor = None;
     }
 
     let cursor_position = primary_window.single().ok().and_then(|w| w.cursor_position());
 
-    // --- Pan: middle-click drag ---
+    // --- Pan: middle-click drag (XZ plane) ---
     let mut pan_delta = Vec2::ZERO;
-    if middle_pressed {
+    if pan_active {
         if let Some(pos) = cursor_position {
             if let Some(anchor) = *pan_anchor {
                 pan_delta = pos - anchor;
@@ -102,9 +114,22 @@ pub fn chase_camera_control(
         }
     }
 
+    // --- Lift: middle + left/right drag (vertical only) ---
+    // Only the Y component of cursor delta matters here — horizontal
+    // motion is intentionally ignored (handled by pan/orbit).
+    let mut lift_delta = 0.0_f32;
+    if lift_active {
+        if let Some(pos) = cursor_position {
+            if let Some(anchor) = *lift_anchor {
+                lift_delta = (pos - anchor).y;
+            }
+            *lift_anchor = Some(pos);
+        }
+    }
+
     // --- Orbit: left+right click drag ---
     let mut orbit_delta = Vec2::ZERO;
-    if both_lr {
+    if orbit_active {
         if let Some(pos) = cursor_position {
             if orbit_anchor.is_none() {
                 *orbit_anchor = Some(pos);
@@ -140,6 +165,14 @@ pub fn chase_camera_control(
             let forward = Vec3::new(cam.yaw.sin(), 0.0, cam.yaw.cos());
             let right = Vec3::new(forward.z, 0.0, -forward.x);
             cam.focus += (-right * pan_delta.x - forward * pan_delta.y) * pan_speed;
+        }
+
+        // Lift → slide focus along world Y. Drag mouse down = focus
+        // up (grab-the-scene feel: dragging the cursor down pulls
+        // the world up past the camera).
+        if lift_delta != 0.0 {
+            let lift_speed = cam.distance * cam.pan_sensitivity;
+            cam.focus.y += lift_delta * lift_speed;
         }
 
         // Orbit.

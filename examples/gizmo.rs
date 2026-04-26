@@ -4,11 +4,12 @@
 //! draw built in).
 //!
 //! Mouse:
-//!   * MMB-drag         pan the camera focus
-//!   * LMB+RMB-drag     orbit yaw + pitch
-//!   * Scroll           zoom (log-smoothed)
-//!   * MMB × 2          snap focus to cursor's ground point
-//!   * LMB-drag a handle  translate / rotate / scale the cube
+//!   * MMB-drag             pan the camera focus (XZ plane)
+//!   * MMB+LMB / MMB+RMB    lift the focus (vertical Y, drag up/down)
+//!   * LMB+RMB-drag         orbit yaw + pitch
+//!   * Scroll               zoom (log-smoothed)
+//!   * MMB × 2              snap focus to cursor's ground point
+//!   * LMB-drag a handle    translate / rotate / scale the cube
 //!
 //! Keyboard (forwarded by the gizmo crate's hotkey resource):
 //!   * G                translate-only
@@ -27,16 +28,20 @@ use bevy::prelude::*;
 use bevy_glacial::prelude::*;
 
 fn main() {
+    // Restore the saved window geometry from the last run, falling
+    // back to a 1280×800 default if there's nothing on disk yet.
+    let geometry = WindowGeometry::load("bevy_glacial");
+
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "bevy_glacial gizmo demo".into(),
-                resolution: (1280u32, 800u32).into(),
-                ..default()
-            }),
+            primary_window: Some(geometry.to_window("bevy_glacial gizmo demo")),
             ..default()
         }))
         .add_plugins(GlacialPlugins)
+        // Persists window size + position back to disk on every
+        // resize / move. Not part of GlacialPlugins because the
+        // app name is host-specific.
+        .add_plugins(WindowSettingsPlugin::new("bevy_glacial"))
         // Dark navy clear colour — keeps the scene contrasty for
         // the cube + grid while leaning slightly blue so the grid's
         // cool-white lines feel cohesive against the sky.

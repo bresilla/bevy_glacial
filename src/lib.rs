@@ -26,6 +26,10 @@
 //!   only: draws an R/G/B arrow triad at each entity tagged with
 //!   [`AxisGizmo`]. No interaction.
 //! * [`TransformGizmoPlugin`] — translate / rotate / scale handles.
+//! * [`WindowSettingsPlugin`](window_settings::WindowSettingsPlugin)
+//!   — persists primary-window size + position to
+//!   `~/.config/<app>/window.txt`. Opt-in (needs an app name); not
+//!   bundled in [`GlacialPlugins`].
 //!
 //! ## Getting started
 //!
@@ -69,6 +73,7 @@ pub mod gizmo;
 pub mod grid;
 pub mod prelude;
 pub mod selection_ring;
+pub mod window_settings;
 
 pub use axis_gizmo::{
     draw_axis_gizmos, draw_axis_triad, draw_axis_triad_with_colors, AxisGizmo, AxisGizmoPlugin,
@@ -87,6 +92,7 @@ pub use selection_ring::{
     SelectionRing, SelectionRingEntity, SelectionRingExtension, SelectionRingMaterial,
     SelectionRingPlugin, SelectionRingSettings,
 };
+pub use window_settings::{WindowGeometry, WindowSettingsPlugin};
 
 pub use gizmo::{
     auto_scale_gizmo_to_target, EnumSet, GizmoAutoScale, GizmoCamera, GizmoHotkeys, GizmoMode,

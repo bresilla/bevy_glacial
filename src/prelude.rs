@@ -23,6 +23,7 @@ pub use crate::{
         SelectionRing, SelectionRingEntity, SelectionRingExtension, SelectionRingMaterial,
         SelectionRingPlugin, SelectionRingSettings,
     },
+    window_settings::{WindowGeometry, WindowSettingsPlugin},
     GlacialPlugins,
 };
 
