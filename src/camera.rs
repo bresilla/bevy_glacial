@@ -195,6 +195,7 @@ pub fn chase_camera_zoom(
     keys: Res<ButtonInput<KeyCode>>,
     mut wheel: MessageReader<MouseWheel>,
     mut zoom_target: Local<Option<f64>>,
+    mut last_distance: Local<Option<f32>>,
     mut cameras: Query<(&mut ChaseCamera, &mut Transform)>,
 ) {
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) {
@@ -210,6 +211,17 @@ pub fn chase_camera_zoom(
     }
 
     let Ok((mut cam, mut tr)) = cameras.single_mut() else { return };
+
+    // Detect external writes to `cam.distance` between frames (e.g.
+    // a host-side cinematic-fly system, a follow-rig pull-back). If
+    // anything changed `cam.distance` without going through our
+    // scroll path, adopt that as the new target so we don't pull
+    // back to the stale value the next frame.
+    if let Some(prev) = *last_distance {
+        if (cam.distance - prev).abs() > 1e-3 {
+            *zoom_target = Some(cam.distance as f64);
+        }
+    }
 
     let target = zoom_target.get_or_insert(cam.distance as f64);
     let min = cam.min_distance as f64;
@@ -233,6 +245,9 @@ pub fn chase_camera_zoom(
         cam.distance = *target as f32;
         apply_rig(&cam, &mut tr);
     }
+
+    // Snapshot the post-zoom distance for next-frame change detection.
+    *last_distance = Some(cam.distance);
 }
 
 /// Set the camera's world-space pose from the rig state
