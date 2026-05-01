@@ -71,6 +71,7 @@ pub mod camera;
 pub mod follow;
 pub mod gizmo;
 pub mod grid;
+pub mod joint_gizmos;
 pub mod prelude;
 pub mod selection_ring;
 pub mod window_settings;
@@ -78,6 +79,10 @@ pub mod window_settings;
 pub use axis_gizmo::{
     draw_axis_gizmos, draw_axis_triad, draw_axis_triad_with_colors, AxisGizmo, AxisGizmoPlugin,
     DEFAULT_AXIS_COLORS,
+};
+pub use joint_gizmos::{
+    draw_cone_wireframe, draw_distance_envelope, draw_prismatic_limit_segment,
+    draw_revolute_limit_arc,
 };
 pub use camera::{
     apply_rig, chase_camera_control, chase_camera_zoom, cursor_ray_to_ground, ChaseCamera,

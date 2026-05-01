@@ -5,6 +5,10 @@
 //! use bevy_glacial::prelude::*;
 //! ```
 
+pub use crate::joint_gizmos::{
+    draw_cone_wireframe, draw_distance_envelope, draw_prismatic_limit_segment,
+    draw_revolute_limit_arc,
+};
 pub use crate::{
     axis_gizmo::{
         draw_axis_gizmos, draw_axis_triad, draw_axis_triad_with_colors, AxisGizmo,
